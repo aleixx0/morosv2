@@ -1,0 +1,31 @@
+{
+  "name": "discord-staff-bot",
+  "version": "1.0.0",
+  "description": "Bot de moderación, alertas y bienvenida para Discord",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon --watch index.js index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "moderation",
+    "welcome",
+    "alerts",
+    "staff"
+  ],
+  "author": "TuNombreAquí",
+  "license": "MIT"
+}
