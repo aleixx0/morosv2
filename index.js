@@ -26,28 +26,29 @@ const yts = require('yt-search');
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,   // anti-raid y bienvenida
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, // leer comandos de texto
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates
   ],
   partials: [Partials.Channel],
 });
 
 /* =============== ENV VARS =============== */
 const PREFIX = process.env.PREFIX || '!';
-const STAFF_CHANNEL_ID = process.env.STAFF_CHANNEL_ID;   // canal para !ban/kick/timeout/alert
-const ALERTS_CHANNEL_ID = process.env.ALERTS_CHANNEL_ID; // destino por defecto de !alert
-const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;       // logs avanzados / antispam / antiraid
+const STAFF_CHANNEL_ID = process.env.STAFF_CHANNEL_ID;
+const ALERTS_CHANNEL_ID = process.env.ALERTS_CHANNEL_ID;
+const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
 const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID;
 const OWNER_ID = process.env.OWNER_ID;
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
-const MANAGER_ROLE_ID = process.env.MANAGER_ROLE_ID;     // opcional
+const MANAGER_ROLE_ID = process.env.MANAGER_ROLE_ID;
 const WELCOME_BANNER = process.env.WELCOME_BANNER || 'https://i.imgur.com/qKkT3zD.png';
 const PING_PATH = process.env.PING_PATH || '/ping';
 
 /* =============== HELPERS =============== */
 const guildLang = new Map(); // { guildId: 'es'|'en' }
-const balances = new Map();  // { userId: number } para slots/coinflip (en memoria)
+const balances = new Map();  // { userId: number } para slots/coinflip
 const startTime = Date.now();
 
 function t(guildId, es, en) {
@@ -139,7 +140,7 @@ function buildHelpEmbed(gid) {
         '**Owner / Managers:** `.off` `.onn` `.reiniciar`',
         '',
         '**Staff (usar en canal staff):**',
-        `\`${PREFIX}ban @usuario [razón]\` · \`${PREFIX}kick @usuario [razón]\` · \`${PREFIX}timeout @usuario 10m [razón]\` · \`${PREFIX}alert @usuario [msg]\``,
+        '`!ban @usuario [razón]` · `!kick @usuario [razón]` · `!timeout @usuario 10m [razón]` · `!alert @usuario [msg]`',
       ].join('\n'),
     )
     .setFooter({ text: t(gid, 'Moros Squad | Sistema de Staff', 'Moros Squad | Staff System') })
@@ -330,7 +331,7 @@ client.once('ready', () => {
 });
 
 /* =============== BIENVENIDA & ANTI-RAID =============== */
-const joinBuckets = new Map(); // { guildId: [timestamps] }
+const joinBuckets = new Map();
 
 client.on('guildMemberAdd', async (member) => {
   try {
@@ -356,7 +357,7 @@ client.on('guildMemberAdd', async (member) => {
         staff: null,
         action: 'AntiRaid — Posible oleada de entradas',
         target: member,
-        reason: `Entradas en 20s: ${filtered.length}. Revisa verificación, cierres o modo lento.`,
+        reason: `Entradas en 20s: ${filtered.length}.`,
       }));
     }
   } catch (e) { console.error('guildMemberAdd error:', e); }
@@ -383,7 +384,7 @@ client.on('messageUpdate', async (_old, msg) => {
   }));
 });
 
-/* =============== ANTI-SPAM (timeout + log) =============== */
+/* =============== ANTI-SPAM =============== */
 const spamBuckets = new Map(); // { guildId:userId -> {times: number[]} }
 
 async function handleSpam(message) {
@@ -394,7 +395,7 @@ async function handleSpam(message) {
   entry.times = entry.times.filter(t => now - t <= 5_000); // ventana 5s
   spamBuckets.set(key, entry);
 
-  if (entry.times.length >= 7) { // 7 msgs en 5s => timeout 10m
+  if (entry.times.length >= 7) { // 7 msgs/5s => timeout 10m
     if (message.member?.moderatable) {
       const ms = 10 * 60 * 1000;
       await message.member.timeout(ms, 'Anti-Spam: 7+ mensajes en 5s').catch(()=>{});
@@ -402,14 +403,7 @@ async function handleSpam(message) {
         staff: null,
         action: 'AntiSpam — Timeout aplicado',
         target: message.member,
-        reason: `Usuario envió ${entry.times.length} mensajes en 5s. Timeout 10 minutos.`,
-      }));
-    } else {
-      await logToChannel(message.guild, createLogEmbed({
-        staff: null,
-        action: 'AntiSpam — No moderatable',
-        target: message.member,
-        reason: `No se pudo aplicar timeout. Mensajes en 5s: ${entry.times.length}`,
+        reason: `Usuario envió ${entry.times.length} mensajes en 5s.`,
       }));
     }
     spamBuckets.set(key, { times: [] });
