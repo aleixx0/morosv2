@@ -147,7 +147,6 @@ function buildHelpEmbed(gid) {
 }
 
 /* =============== MÚSICA =============== */
-// Estructura: por cada guild guardamos conexión, player y cola
 const music = new Map(); // guildId -> { connection, player, queue: [Track], textChannelId, voiceChannelId, playing }
 
 class Track {
@@ -179,7 +178,6 @@ async function searchYouTube(query) {
 }
 
 function connectVoice(guild, voiceChannel) {
-  // Crea o reutiliza la conexión de voz
   let data = music.get(guild.id);
   if (data?.connection) return data.connection;
 
@@ -210,7 +208,6 @@ function getOrCreatePlayer(guild) {
   if (!data.player) {
     const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
     player.on('stateChange', (oldState, newState) => {
-      // Cuando una canción termina, reproducimos la siguiente
       if (oldState.status === AudioPlayerStatus.Playing && newState.status === AudioPlayerStatus.Idle) {
         data.playing = false;
         playNext(guild).catch(() => {});
@@ -239,7 +236,7 @@ async function playNext(guild) {
     const stream = ytdl(track.url, {
       filter: 'audioonly',
       quality: 'highestaudio',
-      highWaterMark: 1 << 25, // buffer grande para evitar cortes en Railway
+      highWaterMark: 1 << 25,
     });
     const resource = createAudioResource(stream);
     data.player.play(resource);
@@ -262,14 +259,11 @@ async function playNext(guild) {
 }
 
 async function handlePlayCommand(message, query) {
-  // Debe estar en un canal de voz
   const vc = message.member?.voice?.channel;
   if (!vc) {
     await message.reply('🎧 Entra a un canal de voz primero.');
     return;
   }
-
-  // Busca la pista (URL o texto)
   await message.channel.send('🔎 Buscando…');
   const track = await searchYouTube(query);
   if (!track) {
@@ -278,17 +272,14 @@ async function handlePlayCommand(message, query) {
   }
   track.requestedBy = message.author.tag;
 
-  // Conectar y crear player si no existe
   connectVoice(message.guild, vc);
   getOrCreatePlayer(message.guild);
   const data = music.get(message.guild.id);
   data.textChannelId = message.channel.id;
 
-  // Encolar
   data.queue.push(track);
   await message.channel.send(`➕ Añadido a la cola: **${track.title}**`);
 
-  // Si no se está reproduciendo nada, inicia
   if (!data.playing) {
     playNext(message.guild);
   }
@@ -343,7 +334,6 @@ const joinBuckets = new Map(); // { guildId: [timestamps] }
 
 client.on('guildMemberAdd', async (member) => {
   try {
-    // Bienvenida
     const ch = WELCOME_CHANNEL_ID && member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
     if (ch?.isTextBased()) {
       const embed = new EmbedBuilder()
@@ -356,11 +346,9 @@ client.on('guildMemberAdd', async (member) => {
       await ch.send({ content: `${member}`, embeds: [embed] });
     }
 
-    // Anti-raid simple: 5+ entradas en 20s
     const now = Date.now();
     const arr = joinBuckets.get(member.guild.id) || [];
     arr.push(now);
-    // limpia >20s
     const filtered = arr.filter(t => now - t <= 20_000);
     joinBuckets.set(member.guild.id, filtered);
     if (filtered.length >= 5) {
@@ -374,7 +362,7 @@ client.on('guildMemberAdd', async (member) => {
   } catch (e) { console.error('guildMemberAdd error:', e); }
 });
 
-/* =============== LOGS AVANZADOS (edición/borrado) =============== */
+/* =============== LOGS AVANZADOS =============== */
 client.on('messageDelete', async (msg) => {
   if (!msg.guild || msg.author?.bot) return;
   await logToChannel(msg.guild, createLogEmbed({
@@ -424,7 +412,6 @@ async function handleSpam(message) {
         reason: `No se pudo aplicar timeout. Mensajes en 5s: ${entry.times.length}`,
       }));
     }
-    // resetea bucket para no spamear logs
     spamBuckets.set(key, { times: [] });
   }
 }
@@ -438,16 +425,13 @@ client.on('messageCreate', async (message) => {
     const content = message.content?.trim() ?? '';
     const lc = content.toLowerCase();
 
-    // Anti-spam (solo si no es comando con prefijo !)
     if (!lc.startsWith(PREFIX)) handleSpam(message);
 
-    /* ---- Help siempre responde ---- */
     if (lc === '!helpmoros') {
       await message.channel.send({ embeds: [buildHelpEmbed(message.guild.id)] });
       return;
     }
 
-    /* ---- Owner / Managers ---- */
     const isOwner = message.author.id === OWNER_ID;
     const isManager = MANAGER_ROLE_ID && message.member.roles.cache.has(MANAGER_ROLE_ID);
     const canControl = isOwner || isManager || message.member.permissions.has(PermissionsBitField.Flags.Administrator);
@@ -473,12 +457,11 @@ client.on('messageCreate', async (message) => {
       }
     }
 
-    // Auto-respuesta si mencionan al owner estando OFF
     if (ownerAway && message.mentions.users.has(OWNER_ID)) {
       await message.reply('🛌 Está descansando; responderá cuando pueda.');
     }
 
-    /* ---------- Comandos MÚSICA ---------- */
+    /* ---------- MÚSICA ---------- */
     if (lc.startsWith('.play ')) {
       const query = content.slice('.play'.length).trim();
       if (!query) return message.reply('👉 Usa: `.play <enlace o nombre>`');
@@ -491,7 +474,7 @@ client.on('messageCreate', async (message) => {
     if (lc === '.queue') { handleQueue(message); return; }
     if (lc === '.stop') { handleStop(message); return; }
 
-    /* ---------- Comandos de ANUNCIOS / TEXTOS ---------- */
+    /* ---------- Anuncios / Textos ---------- */
     const sendSimpleEmbed = async (title, description, color = 'Aqua') => {
       const embed = new EmbedBuilder()
         .setTitle(title).setDescription(description)
@@ -501,7 +484,6 @@ client.on('messageCreate', async (message) => {
       await message.channel.send({ embeds: [embed] });
     };
 
-    // .announcements
     if (lc.startsWith('.announcements')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -510,7 +492,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .wipe
     if (lc.startsWith('.wipe')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -526,7 +507,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .raidroles
     if (lc.startsWith('.raidroles')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -535,7 +515,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .wiperoles
     if (lc.startsWith('.wiperoles')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -544,7 +523,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .code
     if (lc.startsWith('.code')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -553,7 +531,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .steam
     if (lc.startsWith('.steam')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -562,7 +539,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .embed Título | Descripción
     if (lc.startsWith('.embed')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -576,8 +552,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    /* ---------- Comandos UTILIDAD ---------- */
-    // .serverstats
+    /* ---------- Utilidad ---------- */
     if (lc === '.serverstats') {
       const g = message.guild;
       const members = g.memberCount;
@@ -597,14 +572,12 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .uptime
     if (lc === '.uptime') {
       const ms = Date.now() - startTime;
       await message.reply(`⏱️ Uptime: **${formatUptime(ms)}**`);
       return;
     }
 
-    // .setlang es/en
     if (lc.startsWith('.setlang')) {
       if (!hasStaffPermission(message.member)) return;
       const arg = content.split(/\s+/)[1];
@@ -617,7 +590,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .morosinfo
     if (lc === '.morosinfo') {
       const embed = new EmbedBuilder()
         .setTitle('🛡️ Moros Clan — Info')
@@ -636,7 +608,6 @@ client.on('messageCreate', async (message) => {
     }
 
     /* ---------- Social / Juegos ---------- */
-    // .meme (lista simple)
     if (lc === '.meme') {
       const memes = [
         'https://i.imgur.com/w3duR07.png',
@@ -650,7 +621,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .poll Pregunta | Opcion1 | Opcion2 | ...
     if (lc.startsWith('.poll')) {
       const raw = content.slice('.poll'.length).trim();
       const parts = raw.split('|').map(s => (s || '').trim()).filter(Boolean);
@@ -659,7 +629,7 @@ client.on('messageCreate', async (message) => {
         return;
       }
       const question = parts.shift();
-      const choices = parts.slice(0, 10); // máximo 10
+      const choices = parts.slice(0, 10);
       const nums = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟'];
       const desc = choices.map((c,i) => `${nums[i]} ${c}`).join('\n');
       const embed = new EmbedBuilder()
@@ -673,11 +643,9 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // Economía simple en memoria
-    const getBal = (id) => balances.get(id) ?? 100; // saldo inicial 100
+    const getBal = (id) => balances.get(id) ?? 100;
     const setBal = (id, val) => balances.set(id, Math.max(0, Math.floor(val)));
 
-    // .slots
     if (lc === '.slots') {
       const bet = 10;
       const icons = ['🍒','🍋','🔔','⭐','🍉','7️⃣'];
@@ -697,7 +665,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .coinflip cara|cruz
     if (lc.startsWith('.coinflip')) {
       const guess = (content.split(/\s+/)[1] || '').toLowerCase();
       if (!['cara','cruz'].includes(guess)) {
@@ -715,7 +682,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .love
     if (lc.startsWith('.love')) {
       const args = content.split(' ').slice(1);
       const target = args.join(' ');
@@ -727,7 +693,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .clear
     if (lc.startsWith('.clear')) {
       if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
         await message.reply('❌ No tienes permiso para usar `.clear`.');
@@ -740,14 +705,13 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // .p (3–24)
     if (lc === '.p') {
       const random = Math.floor(Math.random() * (24 - 3 + 1)) + 3;
       await message.reply(`🎯 Tu número aleatorio es: **${random}**`);
       return;
     }
 
-    /* ---------- Prefijo STAFF (!...) SOLO canal staff ---------- */
+    /* ---------- Prefijo STAFF (!...) ---------- */
     if (!content.startsWith(PREFIX)) return;
     if (message.channel.id !== STAFF_CHANNEL_ID) return;
 
