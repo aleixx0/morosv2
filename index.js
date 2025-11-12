@@ -1,4 +1,4 @@
-// index.js — MOROS BOT • Refactor estable (2025-11-11)
+// index.js — MOROS BOT • Refactor estable + BILINGÜE (🇪🇸/🇺🇸)
 require('dotenv').config();
 
 const {
@@ -16,7 +16,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, // NECESARIO para leer mensajes (!helpmoros / .comandos)
+    GatewayIntentBits.MessageContent, // NECESARIO para leer mensajes
   ],
   partials: [Partials.Channel],
 });
@@ -107,13 +107,13 @@ function buildStaffHelpEmbed(prefix = PREFIX) {
     .setTitle('🧭 Comandos - MOROS BOT')
     .setDescription(
       [
-        '**TEXTO:**',
-        '`.announcements <texto>` — anuncio',
-        '`.wipe <texto>` — anuncio con imagen Moros',
-        '`.raidroles <texto>` — roles de raid',
-        '`.wiperoles <texto>` — roles de wipe',
-        '`.code <texto>` — anuncio CODE',
-        '`.steam <texto>` — anuncio STEAM',
+        '**TEXTO (bilingüe usando `|`):**',
+        '`.announcements ES | EN` — anuncio',
+        '`.wipe ES | EN` — anuncio con imagen Moros',
+        '`.raidroles ES | EN` — roles de raid',
+        '`.wiperoles ES | EN` — roles de wipe',
+        '`.code ES | EN` — anuncio CODE',
+        '`.steam ES | EN` — anuncio STEAM',
         '`.serverstats` — estadísticas',
         '`.love @usuario` — test de amor',
         '`.clear 10` — limpia mensajes',
@@ -252,21 +252,32 @@ client.on('messageCreate', async (message) => {
       }
     }
 
-    /* ----------------- COMANDOS DE TEXTO ----------------- */
+    /* --------- UTIL: separa ES/EN con pipe '|' --------- */
+    const splitESEN = (body, defES, defEN) => {
+      const [spanishRaw, englishRaw] = (body || '').split('|');
+      const spanish = (spanishRaw || '').trim();
+      const english = (englishRaw || '').trim();
+      return [
+        spanish || defES,
+        english || defEN,
+      ];
+    };
+
+    /* ----------------- COMANDOS DE TEXTO (BILINGÜE) ----------------- */
 
     // .announcements
     if (lc.startsWith('.announcements')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
       const body = content.slice('.announcements'.length).trim();
-      if (!body) {
-        await message.channel.send('⚠️ Escribe el anuncio. Ej: `.announcements Mantenimiento 22:00`')
-          .then(m => setTimeout(() => m.delete().catch(()=>{}), 4000));
-        return;
-      }
+      const [es, en] = splitESEN(
+        body,
+        'Anuncio del servidor.',
+        'Server announcement.'
+      );
       const embed = new EmbedBuilder()
         .setTitle('📢 Anuncio Importante')
-        .setDescription(body)
+        .setDescription([`🇪🇸 ${es}`, '', `🇺🇸 ${en}`].join('\n'))
         .setColor(0xFFD700)
         .setFooter({ text: `Enviado por ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
         .setTimestamp();
@@ -279,14 +290,14 @@ client.on('messageCreate', async (message) => {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
       const body = content.slice('.wipe'.length).trim();
-      if (!body) {
-        await message.channel.send('⚠️ Escribe el texto. Ej: `.wipe Día 10/11/25 Moros Clan`')
-          .then(m => setTimeout(() => m.delete().catch(()=>{}), 4000));
-        return;
-      }
+      const [es, en] = splitESEN(
+        body,
+        'Nuevo wipe confirmado para el clan Moros.',
+        'New wipe confirmed for Moros clan.'
+      );
       const embed = new EmbedBuilder()
-        .setTitle('💥 Wipe Confirmado')
-        .setDescription(body)
+        .setTitle('💥 Wipe Confirmado / Confirmed Wipe')
+        .setDescription([`🇪🇸 ${es}`, '', `🇺🇸 ${en}`].join('\n'))
         .setImage('https://cdn.discordapp.com/attachments/1396472334814150758/1437139997051457616/Moros_Squad.webp?ex=6912d12c&is=69117fac&hm=96d9b5b5776bad422213abc9190c02b6ecdd4a4543fbabe6aa4adbbb73c6b48a&')
         .setColor(0xA020F0)
         .setFooter({ text: `Enviado por ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
@@ -300,9 +311,14 @@ client.on('messageCreate', async (message) => {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
       const body = content.slice('.raidroles'.length).trim();
+      const [es, en] = splitESEN(
+        body,
+        'Reacciona con ✅ para unirte a la raid.',
+        'React with ✅ to join the raid.'
+      );
       const embed = new EmbedBuilder()
         .setTitle('🚨 Raid Roles')
-        .setDescription(body || 'Reacciona con ✅ para unirte a la raid.')
+        .setDescription([`🇪🇸 ${es}`, '', `🇺🇸 ${en}`].join('\n'))
         .setColor(0xFF3B30)
         .setFooter({ text: `Enviado por ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
         .setTimestamp();
@@ -315,9 +331,14 @@ client.on('messageCreate', async (message) => {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
       const body = content.slice('.wiperoles'.length).trim();
+      const [es, en] = splitESEN(
+        body,
+        'Reacciona para recibir el rol de wipe.',
+        'React to get the wipe role.'
+      );
       const embed = new EmbedBuilder()
         .setTitle('🧹 Wipe Roles')
-        .setDescription(body || 'Reacciona para recibir el rol de wipe.')
+        .setDescription([`🇪🇸 ${es}`, '', `🇺🇸 ${en}`].join('\n'))
         .setColor(0x34C759)
         .setFooter({ text: `Enviado por ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
         .setTimestamp();
@@ -330,14 +351,14 @@ client.on('messageCreate', async (message) => {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
       const body = content.slice('.code'.length).trim();
-      if (!body) {
-        await message.channel.send('⚠️ Escribe el texto. Ej: `.code Código MOROS-2025 | Reacciona para recibirlo`')
-          .then(m => setTimeout(() => m.delete().catch(()=>{}), 4000));
-        return;
-      }
+      const [es, en] = splitESEN(
+        body,
+        'Código disponible, reacciona para obtenerlo.',
+        'Code available, react to get it.'
+      );
       const embed = new EmbedBuilder()
-        .setTitle('🧩 CODE')
-        .setDescription(body)
+        .setTitle('🧩 CODE / CÓDIGO')
+        .setDescription([`🇪🇸 ${es}`, '', `🇺🇸 ${en}`].join('\n'))
         .setColor(0x00AEEF)
         .setFooter({ text: `Enviado por ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
         .setTimestamp();
@@ -350,15 +371,22 @@ client.on('messageCreate', async (message) => {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
       const body = content.slice('.steam'.length).trim();
+      const [es, en] = splitESEN(
+        body,
+        'Únete a nuestro grupo de Steam.',
+        'Join our Steam group.'
+      );
       const embed = new EmbedBuilder()
         .setTitle('🔥 STEAM')
-        .setDescription(body || 'Únete al grupo de Steam y reacciona con 🔥.')
+        .setDescription([`🇪🇸 ${es}`, '', `🇺🇸 ${en}`].join('\n'))
         .setColor(0x1B2838)
         .setFooter({ text: `Enviado por ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
         .setTimestamp();
       await message.channel.send({ embeds: [embed] });
       return;
     }
+
+    /* ----------------- OTROS COMANDOS ----------------- */
 
     // .serverstats
     if (lc === '.serverstats') {
