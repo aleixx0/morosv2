@@ -1,4 +1,4 @@
-// index.js — MOROS BOT • Full + AntiSpam/AntiRaid + Juegos + Encuestas (2025-11-12)
+// index.js — MOROS BOT • Full + Música + AntiSpam/AntiRaid + Juegos + Encuestas (2025-11-12)
 require('dotenv').config();
 
 const {
@@ -10,13 +10,25 @@ const {
 } = require('discord.js');
 const express = require('express');
 
+/* ====== IMPORTS MÚSICA ====== */
+const {
+  joinVoiceChannel,
+  createAudioPlayer,
+  NoSubscriberBehavior,
+  createAudioResource,
+  AudioPlayerStatus,
+  getVoiceConnection,
+} = require('@discordjs/voice');
+const ytdl = require('ytdl-core');
+const yts = require('yt-search');
+
 /* =============== CLIENT & INTENTS =============== */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,   // para anti-raid y bienvenida
+    GatewayIntentBits.GuildMembers,   // anti-raid y bienvenida
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, // para leer comandos con texto
+    GatewayIntentBits.MessageContent, // leer comandos de texto
   ],
   partials: [Partials.Channel],
 });
@@ -110,6 +122,9 @@ function buildHelpEmbed(gid) {
         '`.steam <texto>`',
         '`.embed <título> | <descripción>`',
         '',
+        '**Música:**',
+        '`.play <link o nombre>` · `.queue` · `.skip` · `.pause` · `.resume` · `.stop`',
+        '',
         '**Utilidad y social:**',
         '`.serverstats` · `.uptime` · `.p`',
         '`.love @usuario` · `.meme`',
@@ -129,6 +144,193 @@ function buildHelpEmbed(gid) {
     )
     .setFooter({ text: t(gid, 'Moros Squad | Sistema de Staff', 'Moros Squad | Staff System') })
     .setTimestamp();
+}
+
+/* =============== MÚSICA =============== */
+// Estructura: por cada guild guardamos conexión, player y cola
+const music = new Map(); // guildId -> { connection, player, queue: [Track], textChannelId, voiceChannelId, playing }
+
+class Track {
+  constructor({ title, url, requestedBy }) {
+    this.title = title;
+    this.url = url;
+    this.requestedBy = requestedBy;
+  }
+}
+
+async function searchYouTube(query) {
+  if (ytdl.validateURL(query)) {
+    const info = await ytdl.getInfo(query);
+    return new Track({
+      title: info.videoDetails.title,
+      url: info.videoDetails.video_url,
+      requestedBy: null,
+    });
+  } else {
+    const res = await yts(query);
+    const v = res.videos && res.videos.length ? res.videos[0] : null;
+    if (!v) return null;
+    return new Track({
+      title: v.title,
+      url: v.url,
+      requestedBy: null,
+    });
+  }
+}
+
+function connectVoice(guild, voiceChannel) {
+  // Crea o reutiliza la conexión de voz
+  let data = music.get(guild.id);
+  if (data?.connection) return data.connection;
+
+  const connection = joinVoiceChannel({
+    channelId: voiceChannel.id,
+    guildId: guild.id,
+    adapterCreator: guild.voiceAdapterCreator,
+    selfDeaf: true,
+  });
+
+  if (!data) {
+    data = { connection, player: null, queue: [], textChannelId: null, voiceChannelId: voiceChannel.id, playing: false };
+    music.set(guild.id, data);
+  } else {
+    data.connection = connection;
+    data.voiceChannelId = voiceChannel.id;
+  }
+
+  return connection;
+}
+
+function getOrCreatePlayer(guild) {
+  let data = music.get(guild.id);
+  if (!data) {
+    data = { connection: null, player: null, queue: [], textChannelId: null, voiceChannelId: null, playing: false };
+    music.set(guild.id, data);
+  }
+  if (!data.player) {
+    const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
+    player.on('stateChange', (oldState, newState) => {
+      // Cuando una canción termina, reproducimos la siguiente
+      if (oldState.status === AudioPlayerStatus.Playing && newState.status === AudioPlayerStatus.Idle) {
+        data.playing = false;
+        playNext(guild).catch(() => {});
+      }
+    });
+    player.on('error', (e) => {
+      console.error('Player error:', e);
+      data.playing = false;
+      playNext(guild).catch(() => {});
+    });
+    data.player = player;
+  }
+  return data.player;
+}
+
+async function playNext(guild) {
+  const data = music.get(guild.id);
+  if (!data || !data.connection || !data.player) return;
+  if (!data.queue.length) {
+    data.playing = false;
+    return;
+  }
+
+  const track = data.queue.shift();
+  try {
+    const stream = ytdl(track.url, {
+      filter: 'audioonly',
+      quality: 'highestaudio',
+      highWaterMark: 1 << 25, // buffer grande para evitar cortes en Railway
+    });
+    const resource = createAudioResource(stream);
+    data.player.play(resource);
+    data.connection.subscribe(data.player);
+    data.playing = true;
+
+    const textCh = guild.channels.cache.get(data.textChannelId);
+    if (textCh?.isTextBased()) {
+      await textCh.send(`🎶 Reproduciendo: **${track.title}** ${track.requestedBy ? `(por ${track.requestedBy})` : ''}`);
+    }
+  } catch (err) {
+    console.error('playNext error:', err);
+    const textCh = guild.channels.cache.get(data.textChannelId);
+    if (textCh?.isTextBased()) {
+      await textCh.send('⚠️ Error reproduciendo la pista. Pasando a la siguiente…');
+    }
+    data.playing = false;
+    return playNext(guild);
+  }
+}
+
+async function handlePlayCommand(message, query) {
+  // Debe estar en un canal de voz
+  const vc = message.member?.voice?.channel;
+  if (!vc) {
+    await message.reply('🎧 Entra a un canal de voz primero.');
+    return;
+  }
+
+  // Busca la pista (URL o texto)
+  await message.channel.send('🔎 Buscando…');
+  const track = await searchYouTube(query);
+  if (!track) {
+    await message.channel.send('❌ No encontré resultados.');
+    return;
+  }
+  track.requestedBy = message.author.tag;
+
+  // Conectar y crear player si no existe
+  connectVoice(message.guild, vc);
+  getOrCreatePlayer(message.guild);
+  const data = music.get(message.guild.id);
+  data.textChannelId = message.channel.id;
+
+  // Encolar
+  data.queue.push(track);
+  await message.channel.send(`➕ Añadido a la cola: **${track.title}**`);
+
+  // Si no se está reproduciendo nada, inicia
+  if (!data.playing) {
+    playNext(message.guild);
+  }
+}
+
+function handleSkip(message) {
+  const data = music.get(message.guild.id);
+  if (!data?.player) return message.reply('⏭️ No hay nada reproduciéndose.');
+  data.player.stop(true);
+  message.reply('⏭️ Saltado.');
+}
+
+function handlePause(message) {
+  const data = music.get(message.guild.id);
+  if (!data?.player) return message.reply('⏸️ No hay nada reproduciéndose.');
+  data.player.pause();
+  message.reply('⏸️ Pausado.');
+}
+
+function handleResume(message) {
+  const data = music.get(message.guild.id);
+  if (!data?.player) return message.reply('▶️ No hay nada pausado.');
+  data.player.unpause();
+  message.reply('▶️ Reanudado.');
+}
+
+function handleQueue(message) {
+  const data = music.get(message.guild.id);
+  if (!data?.queue?.length) return message.reply('📭 La cola está vacía.');
+  const list = data.queue.slice(0, 10).map((t, i) => `${i + 1}. ${t.title} — solicitado por ${t.requestedBy || 'alguien'}`).join('\n');
+  message.reply(`📜 **Cola (siguientes):**\n${list}`);
+}
+
+function handleStop(message) {
+  const data = music.get(message.guild.id);
+  if (!data) return message.reply('⏹️ No hay nada que parar.');
+  data.queue = [];
+  data.playing = false;
+  try { data.player?.stop(true); } catch {}
+  try { getVoiceConnection(message.guild.id)?.destroy(); } catch {}
+  music.delete(message.guild.id);
+  message.reply('⏹️ Música detenida y desconectado del canal.');
 }
 
 /* =============== READY =============== */
@@ -194,7 +396,7 @@ client.on('messageUpdate', async (_old, msg) => {
 });
 
 /* =============== ANTI-SPAM (timeout + log) =============== */
-const spamBuckets = new Map(); // { guildId:userId -> {count, timestamps[]} }
+const spamBuckets = new Map(); // { guildId:userId -> {times: number[]} }
 
 async function handleSpam(message) {
   const key = `${message.guild.id}:${message.author.id}`;
@@ -236,7 +438,7 @@ client.on('messageCreate', async (message) => {
     const content = message.content?.trim() ?? '';
     const lc = content.toLowerCase();
 
-    // Anti-spam (solo si no es comando staff)
+    // Anti-spam (solo si no es comando con prefijo !)
     if (!lc.startsWith(PREFIX)) handleSpam(message);
 
     /* ---- Help siempre responde ---- */
@@ -275,6 +477,19 @@ client.on('messageCreate', async (message) => {
     if (ownerAway && message.mentions.users.has(OWNER_ID)) {
       await message.reply('🛌 Está descansando; responderá cuando pueda.');
     }
+
+    /* ---------- Comandos MÚSICA ---------- */
+    if (lc.startsWith('.play ')) {
+      const query = content.slice('.play'.length).trim();
+      if (!query) return message.reply('👉 Usa: `.play <enlace o nombre>`');
+      await handlePlayCommand(message, query);
+      return;
+    }
+    if (lc === '.skip') { handleSkip(message); return; }
+    if (lc === '.pause') { handlePause(message); return; }
+    if (lc === '.resume') { handleResume(message); return; }
+    if (lc === '.queue') { handleQueue(message); return; }
+    if (lc === '.stop') { handleStop(message); return; }
 
     /* ---------- Comandos de ANUNCIOS / TEXTOS ---------- */
     const sendSimpleEmbed = async (title, description, color = 'Aqua') => {
