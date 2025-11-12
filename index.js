@@ -1,4 +1,4 @@
-// index.js — MOROS BOT • Full + Música + AntiSpam/AntiRaid + Juegos + Encuestas (2025-11-12)
+// index.js — MOROS BOT • Full + AntiSpam/AntiRaid + Juegos + Encuestas (2025-11-12)
 require('dotenv').config();
 
 const {
@@ -10,45 +10,32 @@ const {
 } = require('discord.js');
 const express = require('express');
 
-/* ====== IMPORTS MÚSICA ====== */
-const {
-  joinVoiceChannel,
-  createAudioPlayer,
-  NoSubscriberBehavior,
-  createAudioResource,
-  AudioPlayerStatus,
-  getVoiceConnection,
-} = require('@discordjs/voice');
-const ytdl = require('ytdl-core');
-const yts = require('yt-search');
-
 /* =============== CLIENT & INTENTS =============== */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMembers,   // para anti-raid y bienvenida
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildVoiceStates
+    GatewayIntentBits.MessageContent, // para leer comandos con texto
   ],
   partials: [Partials.Channel],
 });
 
 /* =============== ENV VARS =============== */
 const PREFIX = process.env.PREFIX || '!';
-const STAFF_CHANNEL_ID = process.env.STAFF_CHANNEL_ID;
-const ALERTS_CHANNEL_ID = process.env.ALERTS_CHANNEL_ID;
-const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
+const STAFF_CHANNEL_ID = process.env.STAFF_CHANNEL_ID;   // canal para !ban/kick/timeout/alert
+const ALERTS_CHANNEL_ID = process.env.ALERTS_CHANNEL_ID; // destino por defecto de !alert
+const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;       // logs avanzados / antispam / antiraid
 const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID;
 const OWNER_ID = process.env.OWNER_ID;
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
-const MANAGER_ROLE_ID = process.env.MANAGER_ROLE_ID;
+const MANAGER_ROLE_ID = process.env.MANAGER_ROLE_ID;     // opcional
 const WELCOME_BANNER = process.env.WELCOME_BANNER || 'https://i.imgur.com/qKkT3zD.png';
 const PING_PATH = process.env.PING_PATH || '/ping';
 
 /* =============== HELPERS =============== */
 const guildLang = new Map(); // { guildId: 'es'|'en' }
-const balances = new Map();  // { userId: number } para slots/coinflip
+const balances = new Map();  // { userId: number } para slots/coinflip (en memoria)
 const startTime = Date.now();
 
 function t(guildId, es, en) {
@@ -123,9 +110,6 @@ function buildHelpEmbed(gid) {
         '`.steam <texto>`',
         '`.embed <título> | <descripción>`',
         '',
-        '**Música:**',
-        '`.play <link o nombre>` · `.queue` · `.skip` · `.pause` · `.resume` · `.stop`',
-        '',
         '**Utilidad y social:**',
         '`.serverstats` · `.uptime` · `.p`',
         '`.love @usuario` · `.meme`',
@@ -140,189 +124,11 @@ function buildHelpEmbed(gid) {
         '**Owner / Managers:** `.off` `.onn` `.reiniciar`',
         '',
         '**Staff (usar en canal staff):**',
-        '`!ban @usuario [razón]` · `!kick @usuario [razón]` · `!timeout @usuario 10m [razón]` · `!alert @usuario [msg]`',
+        `\`${PREFIX}ban @usuario [razón]\` · \`${PREFIX}kick @usuario [razón]\` · \`${PREFIX}timeout @usuario 10m [razón]\` · \`${PREFIX}alert @usuario [msg]\``,
       ].join('\n'),
     )
     .setFooter({ text: t(gid, 'Moros Squad | Sistema de Staff', 'Moros Squad | Staff System') })
     .setTimestamp();
-}
-
-/* =============== MÚSICA =============== */
-const music = new Map(); // guildId -> { connection, player, queue: [Track], textChannelId, voiceChannelId, playing }
-
-class Track {
-  constructor({ title, url, requestedBy }) {
-    this.title = title;
-    this.url = url;
-    this.requestedBy = requestedBy;
-  }
-}
-
-async function searchYouTube(query) {
-  if (ytdl.validateURL(query)) {
-    const info = await ytdl.getInfo(query);
-    return new Track({
-      title: info.videoDetails.title,
-      url: info.videoDetails.video_url,
-      requestedBy: null,
-    });
-  } else {
-    const res = await yts(query);
-    const v = res.videos && res.videos.length ? res.videos[0] : null;
-    if (!v) return null;
-    return new Track({
-      title: v.title,
-      url: v.url,
-      requestedBy: null,
-    });
-  }
-}
-
-function connectVoice(guild, voiceChannel) {
-  let data = music.get(guild.id);
-  if (data?.connection) return data.connection;
-
-  const connection = joinVoiceChannel({
-    channelId: voiceChannel.id,
-    guildId: guild.id,
-    adapterCreator: guild.voiceAdapterCreator,
-    selfDeaf: true,
-  });
-
-  if (!data) {
-    data = { connection, player: null, queue: [], textChannelId: null, voiceChannelId: voiceChannel.id, playing: false };
-    music.set(guild.id, data);
-  } else {
-    data.connection = connection;
-    data.voiceChannelId = voiceChannel.id;
-  }
-
-  return connection;
-}
-
-function getOrCreatePlayer(guild) {
-  let data = music.get(guild.id);
-  if (!data) {
-    data = { connection: null, player: null, queue: [], textChannelId: null, voiceChannelId: null, playing: false };
-    music.set(guild.id, data);
-  }
-  if (!data.player) {
-    const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
-    player.on('stateChange', (oldState, newState) => {
-      if (oldState.status === AudioPlayerStatus.Playing && newState.status === AudioPlayerStatus.Idle) {
-        data.playing = false;
-        playNext(guild).catch(() => {});
-      }
-    });
-    player.on('error', (e) => {
-      console.error('Player error:', e);
-      data.playing = false;
-      playNext(guild).catch(() => {});
-    });
-    data.player = player;
-  }
-  return data.player;
-}
-
-async function playNext(guild) {
-  const data = music.get(guild.id);
-  if (!data || !data.connection || !data.player) return;
-  if (!data.queue.length) {
-    data.playing = false;
-    return;
-  }
-
-  const track = data.queue.shift();
-  try {
-    const stream = ytdl(track.url, {
-      filter: 'audioonly',
-      quality: 'highestaudio',
-      highWaterMark: 1 << 25,
-    });
-    const resource = createAudioResource(stream);
-    data.player.play(resource);
-    data.connection.subscribe(data.player);
-    data.playing = true;
-
-    const textCh = guild.channels.cache.get(data.textChannelId);
-    if (textCh?.isTextBased()) {
-      await textCh.send(`🎶 Reproduciendo: **${track.title}** ${track.requestedBy ? `(por ${track.requestedBy})` : ''}`);
-    }
-  } catch (err) {
-    console.error('playNext error:', err);
-    const textCh = guild.channels.cache.get(data.textChannelId);
-    if (textCh?.isTextBased()) {
-      await textCh.send('⚠️ Error reproduciendo la pista. Pasando a la siguiente…');
-    }
-    data.playing = false;
-    return playNext(guild);
-  }
-}
-
-async function handlePlayCommand(message, query) {
-  const vc = message.member?.voice?.channel;
-  if (!vc) {
-    await message.reply('🎧 Entra a un canal de voz primero.');
-    return;
-  }
-  await message.channel.send('🔎 Buscando…');
-  const track = await searchYouTube(query);
-  if (!track) {
-    await message.channel.send('❌ No encontré resultados.');
-    return;
-  }
-  track.requestedBy = message.author.tag;
-
-  connectVoice(message.guild, vc);
-  getOrCreatePlayer(message.guild);
-  const data = music.get(message.guild.id);
-  data.textChannelId = message.channel.id;
-
-  data.queue.push(track);
-  await message.channel.send(`➕ Añadido a la cola: **${track.title}**`);
-
-  if (!data.playing) {
-    playNext(message.guild);
-  }
-}
-
-function handleSkip(message) {
-  const data = music.get(message.guild.id);
-  if (!data?.player) return message.reply('⏭️ No hay nada reproduciéndose.');
-  data.player.stop(true);
-  message.reply('⏭️ Saltado.');
-}
-
-function handlePause(message) {
-  const data = music.get(message.guild.id);
-  if (!data?.player) return message.reply('⏸️ No hay nada reproduciéndose.');
-  data.player.pause();
-  message.reply('⏸️ Pausado.');
-}
-
-function handleResume(message) {
-  const data = music.get(message.guild.id);
-  if (!data?.player) return message.reply('▶️ No hay nada pausado.');
-  data.player.unpause();
-  message.reply('▶️ Reanudado.');
-}
-
-function handleQueue(message) {
-  const data = music.get(message.guild.id);
-  if (!data?.queue?.length) return message.reply('📭 La cola está vacía.');
-  const list = data.queue.slice(0, 10).map((t, i) => `${i + 1}. ${t.title} — solicitado por ${t.requestedBy || 'alguien'}`).join('\n');
-  message.reply(`📜 **Cola (siguientes):**\n${list}`);
-}
-
-function handleStop(message) {
-  const data = music.get(message.guild.id);
-  if (!data) return message.reply('⏹️ No hay nada que parar.');
-  data.queue = [];
-  data.playing = false;
-  try { data.player?.stop(true); } catch {}
-  try { getVoiceConnection(message.guild.id)?.destroy(); } catch {}
-  music.delete(message.guild.id);
-  message.reply('⏹️ Música detenida y desconectado del canal.');
 }
 
 /* =============== READY =============== */
@@ -331,10 +137,11 @@ client.once('ready', () => {
 });
 
 /* =============== BIENVENIDA & ANTI-RAID =============== */
-const joinBuckets = new Map();
+const joinBuckets = new Map(); // { guildId: [timestamps] }
 
 client.on('guildMemberAdd', async (member) => {
   try {
+    // Bienvenida
     const ch = WELCOME_CHANNEL_ID && member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
     if (ch?.isTextBased()) {
       const embed = new EmbedBuilder()
@@ -347,9 +154,11 @@ client.on('guildMemberAdd', async (member) => {
       await ch.send({ content: `${member}`, embeds: [embed] });
     }
 
+    // Anti-raid simple: 5+ entradas en 20s
     const now = Date.now();
     const arr = joinBuckets.get(member.guild.id) || [];
     arr.push(now);
+    // limpia >20s
     const filtered = arr.filter(t => now - t <= 20_000);
     joinBuckets.set(member.guild.id, filtered);
     if (filtered.length >= 5) {
@@ -357,13 +166,13 @@ client.on('guildMemberAdd', async (member) => {
         staff: null,
         action: 'AntiRaid — Posible oleada de entradas',
         target: member,
-        reason: `Entradas en 20s: ${filtered.length}.`,
+        reason: `Entradas en 20s: ${filtered.length}. Revisa verificación, cierres o modo lento.`,
       }));
     }
   } catch (e) { console.error('guildMemberAdd error:', e); }
 });
 
-/* =============== LOGS AVANZADOS =============== */
+/* =============== LOGS AVANZADOS (edición/borrado) =============== */
 client.on('messageDelete', async (msg) => {
   if (!msg.guild || msg.author?.bot) return;
   await logToChannel(msg.guild, createLogEmbed({
@@ -384,8 +193,8 @@ client.on('messageUpdate', async (_old, msg) => {
   }));
 });
 
-/* =============== ANTI-SPAM =============== */
-const spamBuckets = new Map(); // { guildId:userId -> {times: number[]} }
+/* =============== ANTI-SPAM (timeout + log) =============== */
+const spamBuckets = new Map(); // { guildId:userId -> {count, timestamps[]} }
 
 async function handleSpam(message) {
   const key = `${message.guild.id}:${message.author.id}`;
@@ -395,7 +204,7 @@ async function handleSpam(message) {
   entry.times = entry.times.filter(t => now - t <= 5_000); // ventana 5s
   spamBuckets.set(key, entry);
 
-  if (entry.times.length >= 7) { // 7 msgs/5s => timeout 10m
+  if (entry.times.length >= 7) { // 7 msgs en 5s => timeout 10m
     if (message.member?.moderatable) {
       const ms = 10 * 60 * 1000;
       await message.member.timeout(ms, 'Anti-Spam: 7+ mensajes en 5s').catch(()=>{});
@@ -403,9 +212,17 @@ async function handleSpam(message) {
         staff: null,
         action: 'AntiSpam — Timeout aplicado',
         target: message.member,
-        reason: `Usuario envió ${entry.times.length} mensajes en 5s.`,
+        reason: `Usuario envió ${entry.times.length} mensajes en 5s. Timeout 10 minutos.`,
+      }));
+    } else {
+      await logToChannel(message.guild, createLogEmbed({
+        staff: null,
+        action: 'AntiSpam — No moderatable',
+        target: message.member,
+        reason: `No se pudo aplicar timeout. Mensajes en 5s: ${entry.times.length}`,
       }));
     }
+    // resetea bucket para no spamear logs
     spamBuckets.set(key, { times: [] });
   }
 }
@@ -419,13 +236,16 @@ client.on('messageCreate', async (message) => {
     const content = message.content?.trim() ?? '';
     const lc = content.toLowerCase();
 
+    // Anti-spam (solo si no es comando staff)
     if (!lc.startsWith(PREFIX)) handleSpam(message);
 
+    /* ---- Help siempre responde ---- */
     if (lc === '!helpmoros') {
       await message.channel.send({ embeds: [buildHelpEmbed(message.guild.id)] });
       return;
     }
 
+    /* ---- Owner / Managers ---- */
     const isOwner = message.author.id === OWNER_ID;
     const isManager = MANAGER_ROLE_ID && message.member.roles.cache.has(MANAGER_ROLE_ID);
     const canControl = isOwner || isManager || message.member.permissions.has(PermissionsBitField.Flags.Administrator);
@@ -451,24 +271,12 @@ client.on('messageCreate', async (message) => {
       }
     }
 
+    // Auto-respuesta si mencionan al owner estando OFF
     if (ownerAway && message.mentions.users.has(OWNER_ID)) {
       await message.reply('🛌 Está descansando; responderá cuando pueda.');
     }
 
-    /* ---------- MÚSICA ---------- */
-    if (lc.startsWith('.play ')) {
-      const query = content.slice('.play'.length).trim();
-      if (!query) return message.reply('👉 Usa: `.play <enlace o nombre>`');
-      await handlePlayCommand(message, query);
-      return;
-    }
-    if (lc === '.skip') { handleSkip(message); return; }
-    if (lc === '.pause') { handlePause(message); return; }
-    if (lc === '.resume') { handleResume(message); return; }
-    if (lc === '.queue') { handleQueue(message); return; }
-    if (lc === '.stop') { handleStop(message); return; }
-
-    /* ---------- Anuncios / Textos ---------- */
+    /* ---------- Comandos de ANUNCIOS / TEXTOS ---------- */
     const sendSimpleEmbed = async (title, description, color = 'Aqua') => {
       const embed = new EmbedBuilder()
         .setTitle(title).setDescription(description)
@@ -478,6 +286,7 @@ client.on('messageCreate', async (message) => {
       await message.channel.send({ embeds: [embed] });
     };
 
+    // .announcements
     if (lc.startsWith('.announcements')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -486,6 +295,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .wipe
     if (lc.startsWith('.wipe')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -501,6 +311,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .raidroles
     if (lc.startsWith('.raidroles')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -509,6 +320,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .wiperoles
     if (lc.startsWith('.wiperoles')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -517,6 +329,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .code
     if (lc.startsWith('.code')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -525,6 +338,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .steam
     if (lc.startsWith('.steam')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -533,6 +347,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .embed Título | Descripción
     if (lc.startsWith('.embed')) {
       if (!hasStaffPermission(message.member)) return;
       await message.delete().catch(()=>{});
@@ -546,7 +361,8 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    /* ---------- Utilidad ---------- */
+    /* ---------- Comandos UTILIDAD ---------- */
+    // .serverstats
     if (lc === '.serverstats') {
       const g = message.guild;
       const members = g.memberCount;
@@ -566,12 +382,14 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .uptime
     if (lc === '.uptime') {
       const ms = Date.now() - startTime;
       await message.reply(`⏱️ Uptime: **${formatUptime(ms)}**`);
       return;
     }
 
+    // .setlang es/en
     if (lc.startsWith('.setlang')) {
       if (!hasStaffPermission(message.member)) return;
       const arg = content.split(/\s+/)[1];
@@ -584,6 +402,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .morosinfo
     if (lc === '.morosinfo') {
       const embed = new EmbedBuilder()
         .setTitle('🛡️ Moros Clan — Info')
@@ -602,6 +421,7 @@ client.on('messageCreate', async (message) => {
     }
 
     /* ---------- Social / Juegos ---------- */
+    // .meme (lista simple)
     if (lc === '.meme') {
       const memes = [
         'https://i.imgur.com/w3duR07.png',
@@ -615,6 +435,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .poll Pregunta | Opcion1 | Opcion2 | ...
     if (lc.startsWith('.poll')) {
       const raw = content.slice('.poll'.length).trim();
       const parts = raw.split('|').map(s => (s || '').trim()).filter(Boolean);
@@ -623,7 +444,7 @@ client.on('messageCreate', async (message) => {
         return;
       }
       const question = parts.shift();
-      const choices = parts.slice(0, 10);
+      const choices = parts.slice(0, 10); // máximo 10
       const nums = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟'];
       const desc = choices.map((c,i) => `${nums[i]} ${c}`).join('\n');
       const embed = new EmbedBuilder()
@@ -637,9 +458,11 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    const getBal = (id) => balances.get(id) ?? 100;
+    // Economía simple en memoria
+    const getBal = (id) => balances.get(id) ?? 100; // saldo inicial 100
     const setBal = (id, val) => balances.set(id, Math.max(0, Math.floor(val)));
 
+    // .slots
     if (lc === '.slots') {
       const bet = 10;
       const icons = ['🍒','🍋','🔔','⭐','🍉','7️⃣'];
@@ -659,6 +482,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .coinflip cara|cruz
     if (lc.startsWith('.coinflip')) {
       const guess = (content.split(/\s+/)[1] || '').toLowerCase();
       if (!['cara','cruz'].includes(guess)) {
@@ -676,6 +500,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .love
     if (lc.startsWith('.love')) {
       const args = content.split(' ').slice(1);
       const target = args.join(' ');
@@ -687,6 +512,7 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .clear
     if (lc.startsWith('.clear')) {
       if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
         await message.reply('❌ No tienes permiso para usar `.clear`.');
@@ -699,13 +525,14 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // .p (3–24)
     if (lc === '.p') {
       const random = Math.floor(Math.random() * (24 - 3 + 1)) + 3;
       await message.reply(`🎯 Tu número aleatorio es: **${random}**`);
       return;
     }
 
-    /* ---------- Prefijo STAFF (!...) ---------- */
+    /* ---------- Prefijo STAFF (!...) SOLO canal staff ---------- */
     if (!content.startsWith(PREFIX)) return;
     if (message.channel.id !== STAFF_CHANNEL_ID) return;
 
